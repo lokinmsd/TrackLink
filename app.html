@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Трекер ссылок</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+:root{
+  --bg:var(--tg-theme-bg-color,#fff);--bg2:var(--tg-theme-secondary-bg-color,#f1f3f5);
+  --fg:var(--tg-theme-text-color,#111);--hint:var(--tg-theme-hint-color,#7b8794);
+  --accent:var(--tg-theme-button-color,#2a7de1);--accent-fg:var(--tg-theme-button-text-color,#fff);
+}
+*{box-sizing:border-box}
+body{margin:0;padding:16px 16px calc(24px + env(safe-area-inset-bottom,0px));background:var(--bg2);color:var(--fg);font:16px/1.4 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+h1{font-size:22px;margin:4px 0 14px;font-weight:700}
+form{display:flex;gap:8px;margin-bottom:16px}
+input{flex:1;min-width:0;padding:12px 14px;border:0;border-radius:12px;background:var(--bg);color:var(--fg);font:inherit}
+button{border:0;border-radius:12px;padding:12px 16px;background:var(--accent);color:var(--accent-fg);font:inherit;font-weight:600}
+button.ghost{background:transparent;color:var(--accent);padding:6px 0;font-weight:500}
+.link{background:var(--bg);border-radius:16px;padding:14px 16px;margin-bottom:10px}
+.row{display:flex;align-items:center;justify-content:space-between;gap:12px;cursor:pointer}
+.code{font-weight:600}
+.target{color:var(--hint);font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:60vw}
+.count{font-size:28px;font-weight:700;text-align:right;line-height:1}
+.count small{display:block;font-size:12px;font-weight:400;color:var(--hint);margin-top:2px}
+.detail{margin-top:14px;display:none}
+.open .detail{display:block}
+.bars{display:flex;align-items:flex-end;gap:6px;height:72px}
+.bar{flex:1;background:var(--accent);border-radius:6px 6px 2px 2px;min-height:3px;opacity:.9;transition:height .25s}
+.bar.zero{background:var(--hint);opacity:.25}
+.days{display:flex;gap:6px;color:var(--hint);font-size:11px;margin:4px 0 12px}
+.days span{flex:1;text-align:center}
+.cols{display:grid;grid-template-columns:1fr 1fr;gap:12px;font-size:14px}
+.cols h3{margin:0 0 4px;font-size:13px;font-weight:600;color:var(--hint)}
+.cols div div{display:flex;justify-content:space-between}
+.empty{text-align:center;color:var(--hint);padding:40px 16px}
+.err{color:#d33;font-size:14px;margin:-8px 0 12px}
+</style>
+</head>
+<body>
+<h1>Мои ссылки</h1>
+<form id="f"><input id="u" type="url" placeholder="Вставьте ссылку https://…" required><button>Создать</button></form>
+<div id="err" class="err" hidden></div>
+<div id="list"></div>
+<script>
+const tg = Telegram.WebApp; tg.ready(); tg.expand();
+const call = async (path, opt = {}) => {
+  const r = await fetch("/api" + path, { ...opt, headers: { authorization: "tma " + tg.initData, "content-type": "application/json" } });
+  const d = await r.json();
+  if (!r.ok) throw new Error(d.error || "Ошибка");
+  return d;
+};
+const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
+const list = document.getElementById("list"), err = document.getElementById("err");
+
+function pairs(title, rows) {
+  const box = el("div"); box.append(el("h3", "", title));
+  if (!rows.length) box.append(el("div", "", "—"));
+  rows.forEach((r) => { const d = el("div"); d.append(el("span", "", r.k || "—"), el("b", "", r.n)); box.append(d); });
+  return box;
+}
+
+async function loadDetail(code, box) {
+  const d = await call("/links/" + code);
+  const map = Object.fromEntries(d.days.map((x) => [x.k, x.n]));
+  const days = [...Array(7)].map((_, i) => new Date(Date.now() - (6 - i) * 864e5));
+  const vals = days.map((x) => map[x.toISOString().slice(0, 10)] || 0), max = Math.max(1, ...vals);
+  const bars = el("div", "bars"), labels = el("div", "days");
+  vals.forEach((v, i) => {
+    const b = el("div", "bar" + (v ? "" : " zero")); b.style.height = Math.max(4, (v / max) * 100) + "%"; b.title = v;
+    bars.append(b); labels.append(el("span", "", days[i].getDate()));
+  });
+  const cols = el("div", "cols"); cols.append(pairs("Страны", d.countries), pairs("Источники", d.sources));
+  const copy = el("button", "ghost", "Скопировать ссылку");
+  copy.onclick = () => { navigator.clipboard.writeText(location.origin + "/s/" + code); copy.textContent = "Скопировано"; };
+  box.replaceChildren(bars, labels, cols, copy);
+}
+
+function card(l) {
+  const c = el("div", "link"), row = el("div", "row"), left = el("div"), right = el("div", "count");
+  left.append(el("div", "code", "/s/" + l.code), el("div", "target", l.url));
+  right.append(document.createTextNode(l.clicks), el("small", "", "кликов"));
+  row.append(left, right);
+  const detail = el("div", "detail"); let loaded = false;
+  row.onclick = () => { c.classList.toggle("open"); if (!loaded) { loaded = true; loadDetail(l.code, detail).catch(() => (loaded = false)); } };
+  c.append(row, detail); return c;
+}
+
+async function refresh() {
+  const links = await call("/links");
+  list.replaceChildren(...(links.length ? links.map(card) : [el("div", "empty", "Пока нет ссылок. Вставьте адрес выше и нажмите «Создать».")]));
+}
+
+document.getElementById("f").onsubmit = async (e) => {
+  e.preventDefault(); err.hidden = true;
+  try { await call("/links", { method: "POST", body: JSON.stringify({ url: u.value }) }); u.value = ""; await refresh(); }
+  catch (x) { err.textContent = x.message; err.hidden = false; }
+};
+refresh().catch(() => { err.textContent = "Откройте приложение из Telegram."; err.hidden = false; });
+</script>
+</body>
+</html>
