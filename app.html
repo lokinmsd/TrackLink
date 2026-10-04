@@ -3,101 +3,191 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Трекер ссылок</title>
+<title>TrackLink</title>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <style>
 :root{
-  --bg:var(--tg-theme-bg-color,#fff);--bg2:var(--tg-theme-secondary-bg-color,#f1f3f5);
-  --fg:var(--tg-theme-text-color,#111);--hint:var(--tg-theme-hint-color,#7b8794);
-  --accent:var(--tg-theme-button-color,#2a7de1);--accent-fg:var(--tg-theme-button-text-color,#fff);
+  --bg:var(--tg-theme-bg-color,#fff);--fg:var(--tg-theme-text-color,#14161a);
+  --hint:var(--tg-theme-hint-color,#8a919c);--accent:var(--tg-theme-button-color,#3b82f6);
+  --accent-fg:var(--tg-theme-button-text-color,#fff);
+  --line:color-mix(in srgb,var(--fg) 9%,transparent);--ease:cubic-bezier(.2,.8,.2,1);
 }
-*{box-sizing:border-box}
-body{margin:0;padding:16px 16px calc(24px + env(safe-area-inset-bottom,0px));background:var(--bg2);color:var(--fg);font:16px/1.4 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
-h1{font-size:22px;margin:4px 0 14px;font-weight:700}
-form{display:flex;gap:8px;margin-bottom:16px}
-input{flex:1;min-width:0;padding:12px 14px;border:0;border-radius:12px;background:var(--bg);color:var(--fg);font:inherit}
-button{border:0;border-radius:12px;padding:12px 16px;background:var(--accent);color:var(--accent-fg);font:inherit;font-weight:600}
-button.ghost{background:transparent;color:var(--accent);padding:6px 0;font-weight:500}
-.link{background:var(--bg);border-radius:16px;padding:14px 16px;margin-bottom:10px}
-.row{display:flex;align-items:center;justify-content:space-between;gap:12px;cursor:pointer}
-.code{font-weight:600}
-.target{color:var(--hint);font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:60vw}
-.count{font-size:28px;font-weight:700;text-align:right;line-height:1}
-.count small{display:block;font-size:12px;font-weight:400;color:var(--hint);margin-top:2px}
-.detail{margin-top:14px;display:none}
-.open .detail{display:block}
-.bars{display:flex;align-items:flex-end;gap:6px;height:72px}
-.bar{flex:1;background:var(--accent);border-radius:6px 6px 2px 2px;min-height:3px;opacity:.9;transition:height .25s}
-.bar.zero{background:var(--hint);opacity:.25}
-.days{display:flex;gap:6px;color:var(--hint);font-size:11px;margin:4px 0 12px}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.45 system-ui,-apple-system,"SF Pro Text","Segoe UI",Roboto,sans-serif;padding:32px 22px calc(40px + env(safe-area-inset-bottom,0px))}
+.total{font-size:64px;font-weight:300;letter-spacing:-.04em;line-height:1;font-variant-numeric:tabular-nums}
+.cap{color:var(--hint);margin:6px 0 30px}
+form{display:flex;gap:12px;align-items:center;border-bottom:1px solid var(--line);padding-bottom:6px;transition:border-color .3s}
+form:focus-within{border-color:var(--accent)}
+#u{flex:1;min-width:0;border:0;background:transparent;color:var(--fg);font:inherit;font-size:16px;padding:10px 0;outline:0}
+#u::placeholder{color:var(--hint)}
+.add{border:0;border-radius:999px;background:var(--accent);color:var(--accent-fg);padding:9px 18px;font:inherit;font-weight:600;transition:transform .2s var(--ease),opacity .2s}
+.add:active{transform:scale(.96)}.add:disabled{opacity:.5}
+.err{color:#e5484d;font-size:14px;margin-top:10px}
+.list{animation:fade .6s var(--ease)}
+@keyframes fade{from{opacity:0}}
+.item{display:grid;grid-template-rows:1fr;transition:grid-template-rows .45s var(--ease),opacity .35s}
+.item.gone{grid-template-rows:0fr;opacity:0}
+.inner{overflow:hidden;min-height:0;border-bottom:1px solid var(--line)}
+.head{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:18px 0;cursor:pointer;user-select:none}
+.head:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:6px}
+.t{min-width:0;display:flex;flex-direction:column;flex:1}
+.name{font-size:17px;font-weight:600;letter-spacing:-.01em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sub{color:var(--hint);font-size:13px}
+.n{font-size:26px;font-weight:300;letter-spacing:-.02em;font-variant-numeric:tabular-nums;transition:color .3s}
+.item.open .n{color:var(--accent)}
+.rn{font:inherit;font-size:17px;font-weight:600;border:0;border-bottom:1px solid var(--accent);background:transparent;color:var(--fg);outline:0;width:100%;padding:0;user-select:text}
+.more{display:grid;grid-template-rows:0fr;transition:grid-template-rows .45s var(--ease)}
+.item.open .more{grid-template-rows:1fr}
+.more>div{overflow:hidden;min-height:0}
+.pad{padding:2px 0 22px}
+.bars{display:flex;align-items:flex-end;gap:8px;height:64px}
+.bar{flex:1;height:100%;display:flex;align-items:flex-end}
+.bar i{display:block;width:100%;border-radius:4px;background:color-mix(in srgb,var(--fg) 14%,transparent);transform:scaleY(0);transform-origin:bottom;transition:transform .6s var(--ease)}
+.bar.today i{background:var(--accent)}
+.shown .bar i{transform:scaleY(1)}
+.days{display:flex;gap:8px;margin:8px 0 20px;color:var(--hint);font-size:12px}
 .days span{flex:1;text-align:center}
-.cols{display:grid;grid-template-columns:1fr 1fr;gap:12px;font-size:14px}
-.cols h3{margin:0 0 4px;font-size:13px;font-weight:600;color:var(--hint)}
-.cols div div{display:flex;justify-content:space-between}
-.empty{text-align:center;color:var(--hint);padding:40px 16px}
-.err{color:#d33;font-size:14px;margin:-8px 0 12px}
+.cols{display:grid;grid-template-columns:1fr 1fr;gap:24px;margin-bottom:20px}
+.cols h3{margin:0 0 8px;font-size:13px;font-weight:500;color:var(--hint)}
+.r{display:flex;justify-content:space-between;padding:3px 0;font-variant-numeric:tabular-nums}
+.acts{display:flex;gap:22px}
+.acts button{border:0;background:none;padding:0;cursor:pointer;color:var(--accent);font:inherit;font-size:14px;font-weight:500;transition:opacity .2s}
+.acts button:active{opacity:.5}
+.acts .del{color:#e5484d;margin-left:auto}
+.empty{color:var(--hint);padding:56px 0;text-align:center}
+@media (prefers-reduced-motion:reduce){*{transition-duration:.01ms!important;animation:none!important}}
 </style>
 </head>
 <body>
-<h1>Мои ссылки</h1>
-<form id="f"><input id="u" type="url" placeholder="Вставьте ссылку https://…" required><button>Создать</button></form>
+<div class="total" id="total">0</div>
+<div class="cap">всего кликов</div>
+<form id="f"><input id="u" placeholder="Вставьте ссылку" inputmode="url" autocomplete="off" required><button class="add" id="b">Создать</button></form>
 <div id="err" class="err" hidden></div>
-<div id="list"></div>
+<div id="list" class="list"></div>
 <script>
 const tg = Telegram.WebApp; tg.ready(); tg.expand();
+const $ = (id) => document.getElementById(id);
+const el = (t, c, x) => { const e = document.createElement(t); if (c) e.className = c; if (x != null) e.textContent = x; return e; };
+const hap = (k) => { try { tg.HapticFeedback.impactOccurred(k || "light"); } catch {} };
+const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
 const call = async (path, opt = {}) => {
   const r = await fetch("/api" + path, { ...opt, headers: { authorization: "tma " + tg.initData, "content-type": "application/json" } });
-  const d = await r.json();
-  if (!r.ok) throw new Error(d.error || "Ошибка");
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(d.error || (r.status === 401 ? "Откройте приложение из Telegram." : "Ошибка, попробуйте ещё раз"));
   return d;
 };
-const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
-const list = document.getElementById("list"), err = document.getElementById("err");
+const host = (u) => { try { return new URL(u).host.replace(/^www\./, ""); } catch { return u; } };
+const flag = (c) => /^[A-Z]{2}$/.test(c) ? String.fromCodePoint(...[...c].map((x) => 127397 + x.charCodeAt())) : "🌐";
+const fail = (m) => { $("err").textContent = m; $("err").hidden = false; };
+const links = [], list = $("list");
+let shown = 0, raf;
 
-function pairs(title, rows) {
+function countTo(to) {
+  cancelAnimationFrame(raf);
+  const from = shown, t0 = performance.now();
+  if (reduce) { shown = to; $("total").textContent = to.toLocaleString("ru"); return; }
+  const step = (t) => {
+    const p = Math.min(1, (t - t0) / 800), e = 1 - Math.pow(1 - p, 3);
+    shown = Math.round(from + (to - from) * e); $("total").textContent = shown.toLocaleString("ru");
+    if (p < 1) raf = requestAnimationFrame(step);
+  };
+  raf = requestAnimationFrame(step);
+}
+const sync = () => countTo(links.reduce((s, l) => s + l.clicks, 0));
+const showEmpty = () => list.replaceChildren(el("div", "empty", "Пока пусто. Вставьте ссылку выше и нажмите «Создать»."));
+
+function pairs(title, rows, fmt) {
   const box = el("div"); box.append(el("h3", "", title));
-  if (!rows.length) box.append(el("div", "", "—"));
-  rows.forEach((r) => { const d = el("div"); d.append(el("span", "", r.k || "—"), el("b", "", r.n)); box.append(d); });
+  if (!rows.length) box.append(el("div", "r", "—"));
+  rows.forEach((r) => { const d = el("div", "r"); d.append(el("span", "", fmt(r.k)), el("b", "", r.n)); box.append(d); });
   return box;
 }
 
-async function loadDetail(code, box) {
-  const d = await call("/links/" + code);
-  const map = Object.fromEntries(d.days.map((x) => [x.k, x.n]));
-  const days = [...Array(7)].map((_, i) => new Date(Date.now() - (6 - i) * 864e5));
-  const vals = days.map((x) => map[x.toISOString().slice(0, 10)] || 0), max = Math.max(1, ...vals);
-  const bars = el("div", "bars"), labels = el("div", "days");
-  vals.forEach((v, i) => {
-    const b = el("div", "bar" + (v ? "" : " zero")); b.style.height = Math.max(4, (v / max) * 100) + "%"; b.title = v;
-    bars.append(b); labels.append(el("span", "", days[i].getDate()));
-  });
-  const cols = el("div", "cols"); cols.append(pairs("Страны", d.countries), pairs("Источники", d.sources));
-  const copy = el("button", "ghost", "Скопировать ссылку");
-  copy.onclick = () => { navigator.clipboard.writeText(location.origin + "/s/" + code); copy.textContent = "Скопировано"; };
-  box.replaceChildren(bars, labels, cols, copy);
+function row(l) {
+  const item = el("section", "item"), inner = el("div", "inner");
+  const head = el("div", "head"), t = el("span", "t"), name = el("span", "name");
+  const n = el("span", "n", l.clicks.toLocaleString("ru"));
+  head.tabIndex = 0; head.setAttribute("role", "button");
+  const setName = () => { name.textContent = l.name || host(l.url); };
+  setName(); t.append(name, el("span", "sub", "/s/" + l.code)); head.append(t, n);
+  const more = el("div", "more"), mi = el("div"), pad = el("div", "pad");
+  mi.append(pad); more.append(mi); inner.append(head, more); item.append(inner);
+
+  const rename = () => {
+    const inp = el("input", "rn"); inp.value = l.name || ""; inp.placeholder = host(l.url); inp.maxLength = 60;
+    inp.onclick = (e) => e.stopPropagation();
+    name.replaceWith(inp); inp.focus();
+    let done = false;
+    const finish = async (save) => {
+      if (done) return; done = true;
+      if (save) { const v = inp.value.trim();
+        try { await call("/links/" + l.code, { method: "PATCH", body: JSON.stringify({ name: v }) }); l.name = v || null; } catch (x) { fail(x.message); } }
+      inp.replaceWith(name); setName();
+    };
+    inp.onkeydown = (e) => { if (e.key === "Enter") finish(true); if (e.key === "Escape") finish(false); };
+    inp.onblur = () => finish(true);
+  };
+  const doDel = async () => {
+    try {
+      await call("/links/" + l.code, { method: "DELETE" });
+      hap("medium"); item.classList.add("gone"); links.splice(links.indexOf(l), 1); sync();
+      setTimeout(() => { item.remove(); if (!links.length) showEmpty(); }, 480);
+    } catch (x) { fail(x.message); }
+  };
+  const del = () => {
+    const msg = "Удалить ссылку вместе со статистикой?";
+    tg.showConfirm ? tg.showConfirm(msg, (ok) => ok && doDel()) : confirm(msg) && doDel();
+  };
+
+  const detail = async () => {
+    const d = await call("/links/" + l.code);
+    const map = Object.fromEntries(d.days.map((x) => [x.k, x.n]));
+    const days = [...Array(7)].map((_, i) => new Date(Date.now() - (6 - i) * 864e5));
+    const vals = days.map((x) => map[x.toISOString().slice(0, 10)] || 0), max = Math.max(1, ...vals);
+    const bars = el("div", "bars"), labels = el("div", "days");
+    vals.forEach((v, i) => {
+      const b = el("div", "bar" + (i === 6 ? " today" : "")), bi = document.createElement("i");
+      bi.style.height = Math.max(5, (v / max) * 100) + "%"; bi.style.transitionDelay = i * 45 + "ms"; bi.title = v;
+      b.append(bi); bars.append(b); labels.append(el("span", "", days[i].toLocaleDateString("ru", { weekday: "short" })));
+    });
+    const cols = el("div", "cols");
+    cols.append(pairs("Страны", d.countries, (k) => (k ? flag(k) + " " + k : "—")), pairs("Источники", d.sources, (k) => k || "без метки"));
+    const acts = el("div", "acts"), copy = el("button", "", "Копировать"), ren = el("button", "", "Назвать"), rm = el("button", "del", "Удалить");
+    copy.onclick = () => { navigator.clipboard.writeText(location.origin + "/s/" + l.code); hap(); copy.textContent = "Скопировано"; setTimeout(() => (copy.textContent = "Копировать"), 1600); };
+    ren.onclick = rename; rm.onclick = del; acts.append(copy, ren, rm);
+    const box = el("div"); box.append(bars, labels, cols, acts); pad.replaceChildren(box);
+    requestAnimationFrame(() => requestAnimationFrame(() => box.classList.add("shown")));
+  };
+  let loaded = false;
+  const toggle = () => {
+    hap(); const open = item.classList.toggle("open"); head.setAttribute("aria-expanded", open);
+    if (open && !loaded) { loaded = true; detail().catch((x) => { loaded = false; fail(x.message); }); }
+  };
+  head.onclick = toggle;
+  head.onkeydown = (e) => { if (e.target === head && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); toggle(); } };
+  return item;
 }
 
-function card(l) {
-  const c = el("div", "link"), row = el("div", "row"), left = el("div"), right = el("div", "count");
-  left.append(el("div", "code", "/s/" + l.code), el("div", "target", l.url));
-  right.append(document.createTextNode(l.clicks), el("small", "", "кликов"));
-  row.append(left, right);
-  const detail = el("div", "detail"); let loaded = false;
-  row.onclick = () => { c.classList.toggle("open"); if (!loaded) { loaded = true; loadDetail(l.code, detail).catch(() => (loaded = false)); } };
-  c.append(row, detail); return c;
-}
-
-async function refresh() {
-  const links = await call("/links");
-  list.replaceChildren(...(links.length ? links.map(card) : [el("div", "empty", "Пока нет ссылок. Вставьте адрес выше и нажмите «Создать».")]));
-}
-
-document.getElementById("f").onsubmit = async (e) => {
-  e.preventDefault(); err.hidden = true;
-  try { await call("/links", { method: "POST", body: JSON.stringify({ url: u.value }) }); u.value = ""; await refresh(); }
-  catch (x) { err.textContent = x.message; err.hidden = false; }
+$("f").onsubmit = async (e) => {
+  e.preventDefault(); $("err").hidden = true;
+  const v = $("u").value.trim(), url = /^https?:\/\//i.test(v) ? v : "https://" + v, b = $("b");
+  b.disabled = true;
+  try {
+    const { code } = await call("/links", { method: "POST", body: JSON.stringify({ url }) });
+    $("u").value = ""; hap("medium");
+    const l = { code, url, name: null, clicks: 0 }; links.unshift(l);
+    if (links.length === 1) list.replaceChildren();
+    const r = row(l); r.classList.add("gone"); list.prepend(r);
+    requestAnimationFrame(() => requestAnimationFrame(() => r.classList.remove("gone")));
+  } catch (x) { fail(x.message); }
+  b.disabled = false;
 };
-refresh().catch(() => { err.textContent = "Откройте приложение из Telegram."; err.hidden = false; });
+
+call("/links").then((d) => {
+  links.push(...d);
+  links.length ? list.replaceChildren(...links.map(row)) : showEmpty();
+  sync();
+}).catch((x) => fail(x.message));
 </script>
 </body>
 </html>

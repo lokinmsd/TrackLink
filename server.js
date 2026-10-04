@@ -31,11 +31,11 @@ const tg = (method, body) =>
 const ALPHA = "abcdefghijkmnpqrstuvwxyz23456789";
 const newCode = () => [...crypto.randomBytes(6)].map((x) => ALPHA[x % ALPHA.length]).join("");
 
-async function createLink(owner, target) {
+async function createLink(owner, target, name = null) {
   const u = new URL(target);
   if (!/^https?:$/.test(u.protocol)) throw new Error("bad url");
   const code = newCode();
-  await pool.query("insert into links (code,url,owner,created) values ($1,$2,$3,$4)", [code, u.toString(), owner, Date.now()]);
+  await pool.query("insert into links (code,url,owner,created,name) values ($1,$2,$3,$4,$5)", [code, u.toString(), owner, Date.now(), name]);
   return code;
 }
 
@@ -87,13 +87,13 @@ app.use("/api", async (req, res, next) => {
 });
 
 app.post("/api/links", async (req, res) => {
-  try { res.json({ code: await createLink(req.uid, req.body.url) }); }
+  try { res.json({ code: await createLink(req.uid, req.body.url, String(req.body.name || "").trim().slice(0, 60) || null) }); }
   catch { res.status(400).json({ error: "Некорректная ссылка" }); }
 });
 
 app.get("/api/links", async (req, res) => {
   const { rows } = await pool.query(
-    `select l.code, l.url, l.created, (select count(*)::int from clicks c where c.code=l.code) as clicks
+    `select l.code, l.name, l.url, l.created, (select count(*)::int from clicks c where c.code=l.code) as clicks
      from links l where l.owner=$1 order by l.created desc limit 50`, [req.uid]);
   res.json(rows);
 });
@@ -113,4 +113,16 @@ app.get("/api/links/:code", async (req, res) => {
   res.json({ days: days.rows, countries: countries.rows, sources: sources.rows });
 });
 
+app.patch("/api/links/:code", async (req, res) => {
+  const name = String(req.body.name || "").trim().slice(0, 60) || null;
+  const r = await pool.query("update links set name=$1 where code=$2 and owner=$3", [name, req.params.code, req.uid]);
+  res.status(r.rowCount ? 200 : 404).json({ ok: !!r.rowCount });
+});
+
+app.delete("/api/links/:code", async (req, res) => {
+  const r = await pool.query("delete from links where code=$1 and owner=$2", [req.params.code, req.uid]);
+  res.status(r.rowCount ? 200 : 404).json({ ok: !!r.rowCount });
+});
+
+process.on("unhandledRejection", console.error); // чтобы одна ошибка не роняла сервер
 app.listen(process.env.PORT || 3000);
