@@ -13,7 +13,7 @@
   --line:color-mix(in srgb,var(--fg) 9%,transparent);--ease:cubic-bezier(.2,.8,.2,1);
 }
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
-body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.45 system-ui,-apple-system,"SF Pro Text","Segoe UI",Roboto,sans-serif;padding:32px 22px calc(40px + env(safe-area-inset-bottom,0px))}
+body{-webkit-font-smoothing:antialiased;overscroll-behavior:contain;touch-action:manipulation;margin:0;background:var(--bg);color:var(--fg);font:15px/1.45 system-ui,-apple-system,"SF Pro Text","Segoe UI",Roboto,sans-serif;padding:32px 22px calc(40px + env(safe-area-inset-bottom,0px))}
 .total{font-size:64px;font-weight:300;letter-spacing:-.04em;line-height:1;font-variant-numeric:tabular-nums}
 .cap{color:var(--hint);margin:6px 0 12px}
 .plan{display:flex;align-items:center;gap:12px;color:var(--hint);font-size:14px;margin-bottom:28px;min-height:20px}
@@ -32,8 +32,15 @@ form:focus-within{border-color:var(--accent)}
 .add{border:0;border-radius:999px;background:var(--accent);color:var(--accent-fg);padding:9px 18px;font:inherit;font-weight:600;transition:transform .2s var(--ease),opacity .2s}
 .add:active{transform:scale(.96)}.add:disabled{opacity:.5}
 .err{color:#e5484d;font-size:14px;margin-top:10px}
-.list{animation:fade .6s var(--ease)}
-@keyframes fade{from{opacity:0}}
+@keyframes rise{from{opacity:0;transform:translateY(8px)}}
+.stagger .item{animation:rise .55s var(--ease) backwards;animation-delay:calc(var(--i) * 45ms)}
+.sk{height:63px;border-bottom:1px solid var(--line);position:relative;overflow:hidden}
+.sk::after{content:"";position:absolute;inset:0;background:linear-gradient(90deg,transparent,color-mix(in srgb,var(--fg) 6%,transparent),transparent);transform:translateX(-100%);animation:shim 1.4s infinite}
+@keyframes shim{to{transform:translateX(100%)}}
+.spark{width:56px;height:20px;flex:none}
+.head{transition:opacity .2s}.head:active{opacity:.6}
+.inner{contain:layout paint}
+.lite *{animation:none!important}
 .item{display:grid;grid-template-rows:1fr;transition:grid-template-rows .45s var(--ease),opacity .35s}
 .item.gone{grid-template-rows:0fr;opacity:0}
 .inner{overflow:hidden;min-height:0;border-bottom:1px solid var(--line)}
@@ -84,7 +91,18 @@ const tg = Telegram.WebApp; tg.ready(); tg.expand();
 const $ = (id) => document.getElementById(id);
 const el = (t, c, x) => { const e = document.createElement(t); if (c) e.className = c; if (x != null) e.textContent = x; return e; };
 const hap = (k) => { try { tg.HapticFeedback.impactOccurred(k || "light"); } catch {} };
-const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
+const lite = (navigator.hardwareConcurrency || 8) <= 4 || (navigator.deviceMemory || 8) <= 2; // слабые телефоны: меньше анимаций
+if (lite) document.documentElement.classList.add("lite");
+const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches || lite;
+const NS = "http://www.w3.org/2000/svg";
+function spark(v) {
+  const s = document.createElementNS(NS, "svg"), p = document.createElementNS(NS, "polyline"), max = Math.max(1, ...v), flat = !v.some(Boolean);
+  s.setAttribute("viewBox", "0 0 56 20"); s.setAttribute("class", "spark");
+  p.setAttribute("points", v.map((x, i) => `${(i * 56 / 6).toFixed(1)},${(18 - (x / max) * 16).toFixed(1)}`).join(" "));
+  p.setAttribute("fill", "none"); p.setAttribute("stroke", flat ? "var(--hint)" : "var(--accent)"); p.setAttribute("stroke-opacity", flat ? ".4" : "1");
+  p.setAttribute("stroke-width", "1.6"); p.setAttribute("stroke-linecap", "round"); p.setAttribute("stroke-linejoin", "round");
+  s.append(p); return s;
+}
 const call = async (path, opt = {}) => {
   const r = await fetch("/api" + path, { ...opt, headers: { authorization: "tma " + tg.initData, "content-type": "application/json" } });
   const d = await r.json().catch(() => ({}));
@@ -146,7 +164,7 @@ function row(l) {
   const n = el("span", "n", l.clicks.toLocaleString("ru"));
   head.tabIndex = 0; head.setAttribute("role", "button");
   const setName = () => { name.textContent = l.name || host(l.url); };
-  setName(); t.append(name, el("span", "sub", "/s/" + l.code)); head.append(t, n);
+  setName(); t.append(name, el("span", "sub", "/s/" + l.code)); head.append(t, spark(l.spark || [0, 0, 0, 0, 0, 0, 0]), n);
   const more = el("div", "more"), mi = el("div"), pad = el("div", "pad");
   mi.append(pad); more.append(mi); inner.append(head, more); item.append(inner);
 
@@ -186,7 +204,7 @@ function row(l) {
     if (period > 7) bars.style.gap = "3px";
     vals.forEach((v, i) => {
       const b = el("div", "bar" + (i === period - 1 ? " today" : "")), bi = document.createElement("i");
-      bi.style.height = Math.max(5, (v / max) * 100) + "%"; bi.style.transitionDelay = Math.min(i * 45, 600) + "ms"; bi.title = v;
+      bi.style.height = Math.max(5, (v / max) * 100) + "%"; bi.style.transitionDelay = (lite ? 0 : Math.min(i * 45, 600)) + "ms"; bi.title = v;
       b.append(bi); bars.append(b);
       if (period === 7) labels.append(el("span", "", days[i].toLocaleDateString("ru", { weekday: "short" })));
     });
@@ -236,12 +254,16 @@ $("f").onsubmit = async (e) => {
   b.disabled = false;
 };
 
+list.replaceChildren(...[0, 1, 2].map(() => el("div", "sk")));
 loadMe();
 call("/links").then((d) => {
   links.push(...d);
-  links.length ? list.replaceChildren(...links.map(row)) : showEmpty();
+  if (links.length) {
+    const rows = links.map(row); rows.forEach((r, i) => r.style.setProperty("--i", Math.min(i, 8)));
+    list.classList.add("stagger"); list.replaceChildren(...rows); setTimeout(() => list.classList.remove("stagger"), 1300);
+  } else showEmpty();
   sync();
-}).catch((x) => fail(x.message));
+}).catch((x) => { list.replaceChildren(); fail(x.message); });
 </script>
 </body>
 </html>

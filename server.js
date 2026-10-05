@@ -150,7 +150,14 @@ app.get("/api/links", async (req, res) => {
   const { rows } = await pool.query(
     `select l.code, l.name, l.url, l.created, (select count(*)::int from clicks c where c.code=l.code) as clicks
      from links l where l.owner=$1 order by l.created desc limit 50`, [req.uid]);
-  res.json(rows);
+  const since = Date.now() - 7 * 864e5;
+  const sp = await pool.query(
+    `select c.code, to_char(to_timestamp(c.ts/1000.0) at time zone 'UTC','YYYY-MM-DD') as d, count(*)::int as n
+     from clicks c join links l on l.code=c.code where l.owner=$1 and c.ts>$2 group by c.code, d`, [req.uid, since]);
+  const by = {};
+  sp.rows.forEach((r) => ((by[r.code] ||= {})[r.d] = r.n));
+  const days = [...Array(7)].map((_, i) => new Date(Date.now() - (6 - i) * 864e5).toISOString().slice(0, 10));
+  res.json(rows.map((r) => ({ ...r, spark: days.map((d) => by[r.code]?.[d] || 0) })));
 });
 
 app.get("/api/links/:code", async (req, res) => {
