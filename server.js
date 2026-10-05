@@ -38,12 +38,51 @@ async function createLink(owner, target, name = null) {
   if (p.used >= p.limit) throw Object.assign(new Error("limit"), { limit: p.limit });
   const code = newCode();
   await pool.query("insert into links (code,url,owner,created,name) values ($1,$2,$3,$4,$5)", [code, u.toString(), owner, Date.now(), name]);
+  onActivate(owner).catch(console.error);
   return code;
 }
 
 const FREE_LIMIT = Number(process.env.FREE_LIMIT || 10);
 const PRO_PRICE = Number(process.env.PRO_PRICE || 150); // в Stars
 const PRO_DAYS = 30, PRO_LIMIT = 1000;
+const REF_DAYS = Number(process.env.REF_DAYS || 3); // бонусные дни Pro за приглашение
+const REF_MAX = Number(process.env.REF_MAX || 10);  // максимум наград одному пригласившему
+
+async function grantDays(uid, days) {
+  const add = days * 864e5, now = Date.now();
+  const { rows } = await pool.query(
+    `insert into users (id,pro_until) values ($1,$2)
+     on conflict (id) do update set pro_until = greatest(users.pro_until,$3) + $4 returning pro_until`, [uid, now + add, now, add]);
+  return Number(rows[0].pro_until);
+}
+
+let _bn;
+async function botName() {
+  if (!_bn) _bn = (await (await tg("getMe", {})).json()).result?.username;
+  return _bn;
+}
+
+// Приглашённый записывается при /start, но награда только после его первой созданной ссылки
+async function registerRef(inv, ref) {
+  if (inv === ref) return;
+  if ((await pool.query("select 1 from links where owner=$1 limit 1", [inv])).rows[0]) return;
+  const ok = await pool.query("select 1 from users where id=$1 union select 1 from links where owner=$1 limit 1", [ref]);
+  if (!ok.rows[0]) return;
+  await pool.query("insert into referrals (invitee,referrer,ts,rewarded) values ($1,$2,$3,false) on conflict do nothing", [inv, ref, Date.now()]);
+}
+
+async function onActivate(uid) {
+  const r = await pool.query("update referrals set rewarded=true where invitee=$1 and not rewarded returning referrer", [uid]);
+  if (!r.rowCount) return;
+  const ref = r.rows[0].referrer;
+  await grantDays(uid, REF_DAYS);
+  await tg("sendMessage", { chat_id: uid, text: `Бонус за приглашение: +${REF_DAYS} дн. Pro.` });
+  const n = (await pool.query("select count(*)::int as n from referrals where referrer=$1 and rewarded", [ref])).rows[0].n;
+  if (n <= REF_MAX) {
+    await grantDays(ref, REF_DAYS);
+    await tg("sendMessage", { chat_id: ref, text: `Друг начал пользоваться трекером: +${REF_DAYS} дн. Pro.` });
+  }
+}
 
 async function plan(uid) {
   const u = await pool.query("select pro_until from users where id=$1", [uid]);
@@ -108,6 +147,8 @@ app.post("/webhook", (req, res) => {
 
 async function onMessage(m) {
   const chat_id = m.chat.id, text = m.text.trim();
+  const mm = text.match(/^\/start ref_(\d+)/);
+  if (mm) await registerRef(m.from.id, Number(mm[1])).catch(console.error);
   if (text.startsWith("/mute")) {
     const r = await pool.query("insert into users (id,mute) values ($1,true) on conflict (id) do update set mute = not users.mute returning mute", [m.from.id]);
     return tg("sendMessage", { chat_id, text: r.rows[0].mute ? "Уведомления о кликах выключены. Отправьте /mute, чтобы включить снова." : "Уведомления о кликах включены." });
@@ -192,7 +233,10 @@ app.post("/api/links/:code/export", async (req, res) => {
 });
 
 app.get("/api/me", async (req, res) => {
-  res.json({ ...(await plan(req.uid)), price: PRO_PRICE, days: PRO_DAYS, proLimit: PRO_LIMIT });
+  const [p, rc, bn] = await Promise.all([
+    plan(req.uid), pool.query("select count(*)::int as n from referrals where referrer=$1 and rewarded", [req.uid]), botName().catch(() => null)]);
+  res.json({ ...p, price: PRO_PRICE, days: PRO_DAYS, proLimit: PRO_LIMIT,
+    refLink: bn ? `https://t.me/${bn}?start=ref_${req.uid}` : null, refCount: rc.rows[0].n, refDays: REF_DAYS, refMax: REF_MAX });
 });
 
 app.post("/api/invoice", async (req, res) => {

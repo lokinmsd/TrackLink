@@ -16,7 +16,7 @@
 body{-webkit-font-smoothing:antialiased;overscroll-behavior:contain;touch-action:manipulation;margin:0;background:var(--bg);color:var(--fg);font:15px/1.45 system-ui,-apple-system,"SF Pro Text","Segoe UI",Roboto,sans-serif;padding:32px 22px calc(40px + env(safe-area-inset-bottom,0px))}
 .total{font-size:64px;font-weight:300;letter-spacing:-.04em;line-height:1;font-variant-numeric:tabular-nums}
 .cap{color:var(--hint);margin:6px 0 12px}
-.plan{display:flex;align-items:center;gap:12px;color:var(--hint);font-size:14px;margin-bottom:28px;min-height:20px}
+.plan{display:flex;flex-wrap:wrap;align-items:center;gap:6px 14px;color:var(--hint);font-size:14px;margin-bottom:28px;min-height:20px}
 .plan button{border:0;background:none;padding:0;color:var(--accent);font:inherit;font-weight:500;cursor:pointer}
 .scrim{position:fixed;inset:0;background:rgba(0,0,0,.45);opacity:0;pointer-events:none;transition:opacity .35s var(--ease)}
 .sheet{position:fixed;left:0;right:0;bottom:0;background:var(--bg);border-radius:22px 22px 0 0;padding:26px 22px calc(24px + env(safe-area-inset-bottom,0px));transform:translateY(105%);transition:transform .5s var(--ease)}
@@ -85,7 +85,7 @@ form:focus-within{border-color:var(--accent)}
 <div id="err" class="err" hidden></div>
 <div id="list" class="list"></div>
 <div class="scrim" id="scrim"></div>
-<div class="sheet" id="sheet"><h2>TrackLink Pro</h2><p id="sp"></p><button class="add wide" id="pay"></button><button class="ghostb" id="later">Не сейчас</button></div>
+<div class="sheet" id="sheet"><h2 id="sh">TrackLink Pro</h2><p id="sp"></p><button class="add wide" id="pay"></button><button class="add wide" id="share" hidden></button><button class="ghostb" id="cp" hidden></button><button class="ghostb" id="later">Не сейчас</button></div>
 <script>
 const tg = Telegram.WebApp; tg.ready(); tg.expand();
 const $ = (id) => document.getElementById(id);
@@ -117,16 +117,25 @@ let me = null;
 const dt = (ms) => new Date(ms).toLocaleDateString("ru", { day: "numeric", month: "long" });
 function renderPlan() {
   const p = $("plan"); p.replaceChildren(); if (!me) return;
-  if (me.pro) { p.append(el("span", "", "Pro до " + dt(me.until))); return; }
-  const b = el("button", "", "Подключить Pro"); b.onclick = openSheet;
-  p.append(el("span", "", `Бесплатно: ${me.used} из ${me.limit}`), b);
+  const inv = el("button", "", "Пригласить друга"); inv.onclick = () => openSheet("ref");
+  if (me.pro) { p.append(el("span", "", "Pro до " + dt(me.until)), inv); return; }
+  const b = el("button", "", "Pro"); b.onclick = () => openSheet("pro");
+  p.append(el("span", "", `Бесплатно: ${me.used} из ${me.limit}`), b, inv);
 }
 const loadMe = () => call("/me").then((d) => { me = d; renderPlan(); }).catch(() => {});
-function openSheet() {
+function openSheet(kind = "pro") {
   if (!me) return;
-  $("sp").textContent = `${me.days} дней, до ${me.proLimit} ссылок. Продление добавляет дни к текущему сроку.`;
-  $("pay").textContent = `Оплатить ${me.price} ⭐`; document.body.classList.add("open-sheet");
+  const ref = kind === "ref";
+  $("sh").textContent = ref ? "Пригласите друга" : "TrackLink Pro";
+  $("sp").textContent = ref
+    ? `Когда друг создаст первую ссылку, вы оба получите +${me.refDays} дн. Pro. Уже получено за друзей: ${me.refCount} из ${me.refMax}.`
+    : `${me.days} дней, до ${me.proLimit} ссылок. Продление добавляет дни к текущему сроку.`;
+  $("pay").hidden = ref; $("share").hidden = !ref || !me.refLink; $("cp").hidden = !ref || !me.refLink;
+  $("pay").textContent = `Оплатить ${me.price} ⭐`; $("share").textContent = "Отправить другу"; $("cp").textContent = "Скопировать ссылку";
+  document.body.classList.add("open-sheet");
 }
+$("share").onclick = () => tg.openTelegramLink("https://t.me/share/url?url=" + encodeURIComponent(me.refLink) + "&text=" + encodeURIComponent("Короткие ссылки со статистикой кликов"));
+$("cp").onclick = () => { navigator.clipboard.writeText(me.refLink); hap(); $("cp").textContent = "Скопировано"; };
 const closeSheet = () => document.body.classList.remove("open-sheet");
 $("scrim").onclick = closeSheet; $("later").onclick = closeSheet;
 $("pay").onclick = async () => {
