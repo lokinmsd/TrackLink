@@ -34,9 +34,51 @@ const newCode = () => [...crypto.randomBytes(6)].map((x) => ALPHA[x % ALPHA.leng
 async function createLink(owner, target, name = null) {
   const u = new URL(target);
   if (!/^https?:$/.test(u.protocol)) throw new Error("bad url");
+  const p = await plan(owner);
+  if (p.used >= p.limit) throw Object.assign(new Error("limit"), { limit: p.limit });
   const code = newCode();
   await pool.query("insert into links (code,url,owner,created,name) values ($1,$2,$3,$4,$5)", [code, u.toString(), owner, Date.now(), name]);
   return code;
+}
+
+const FREE_LIMIT = Number(process.env.FREE_LIMIT || 10);
+const PRO_PRICE = Number(process.env.PRO_PRICE || 150); // в Stars
+const PRO_DAYS = 30, PRO_LIMIT = 1000;
+
+async function plan(uid) {
+  const u = await pool.query("select pro_until from users where id=$1", [uid]);
+  const until = Number(u.rows[0]?.pro_until || 0), pro = until > Date.now();
+  const used = (await pool.query("select count(*)::int as n from links where owner=$1", [uid])).rows[0].n;
+  return { pro, until: pro ? until : null, limit: pro ? PRO_LIMIT : FREE_LIMIT, used };
+}
+
+// Уведомление владельцу: первый клик и отметки 100, 1000, 10000
+async function notify(code, row) {
+  const n = (await pool.query("select count(*)::int as n from clicks where code=$1", [code])).rows[0].n;
+  if (![1, 100, 1000, 10000].includes(n)) return;
+  const u = await pool.query("select mute from users where id=$1", [row.owner]);
+  if (u.rows[0]?.mute) return;
+  let title = row.name; if (!title) { try { title = new URL(row.url).host; } catch { title = code; } }
+  await tg("sendMessage", { chat_id: row.owner, text: n === 1 ? `Первый клик по «${title}»` : `«${title}»: уже ${n.toLocaleString("ru")} кликов` });
+}
+
+async function preCheckout(q) {
+  const ok = q.currency === "XTR" && q.invoice_payload === `pro:${q.from.id}` && q.total_amount === PRO_PRICE;
+  await tg("answerPreCheckoutQuery", { pre_checkout_query_id: q.id, ok, ...(ok ? {} : { error_message: "Счёт устарел. Откройте приложение и повторите." }) });
+}
+
+async function paid(m) {
+  const p = m.successful_payment, uid = m.from.id;
+  const ins = await pool.query("insert into payments (charge_id,user_id,stars,ts) values ($1,$2,$3,$4) on conflict do nothing",
+    [p.telegram_payment_charge_id, uid, p.total_amount, Date.now()]);
+  if (!ins.rowCount) return; // повтор уведомления: не начисляем второй раз
+  const add = PRO_DAYS * 864e5, now = Date.now();
+  const { rows } = await pool.query(
+    `insert into users (id,pro_until) values ($1,$2)
+     on conflict (id) do update set pro_until = greatest(users.pro_until,$3) + $4 returning pro_until`,
+    [uid, now + add, now, add]);
+  const d = new Date(Number(rows[0].pro_until)).toLocaleDateString("ru-RU");
+  await tg("sendMessage", { chat_id: m.chat.id, text: `Pro активен до ${d}. Спасибо!` });
 }
 
 app.get("/", (_, res) => res.send("ok")); // для проверки живости (health check)
@@ -44,31 +86,41 @@ app.get("/app", (_, res) => res.type("html").send(APP));
 
 app.get("/s/:code", async (req, res) => {
   try {
-    const { rows } = await pool.query("select url from links where code=$1", [req.params.code]);
+    const { rows } = await pool.query("select url, owner, name from links where code=$1", [req.params.code]);
     if (!rows[0]) return res.status(404).send("Ссылка не найдена");
     const ip = (req.headers["x-forwarded-for"] || req.ip || "").toString().split(",")[0].trim();
     const country = geoip.lookup(ip)?.country || "??";
     const device = /mobile|android|iphone/i.test(req.headers["user-agent"] || "") ? "mobile" : "desktop";
     res.redirect(302, rows[0].url); // сначала отвечаем, потом пишем клик
     pool.query("insert into clicks (code,ts,country,device,src) values ($1,$2,$3,$4,$5)",
-      [req.params.code, Date.now(), country, device, req.query.src || ""]).catch(console.error);
+      [req.params.code, Date.now(), country, device, req.query.src || ""]).then(() => notify(req.params.code, rows[0])).catch(console.error);
   } catch (e) { console.error(e); res.status(500).send("Ошибка сервера"); }
 });
 
 app.post("/webhook", (req, res) => {
   if (req.headers["x-telegram-bot-api-secret-token"] !== WEBHOOK_SECRET) return res.sendStatus(403);
   res.send("ok");
-  const m = req.body.message;
-  if (m?.text) onMessage(m).catch(console.error);
+  const u = req.body;
+  if (u.pre_checkout_query) preCheckout(u.pre_checkout_query).catch(console.error);
+  else if (u.message?.successful_payment) paid(u.message).catch(console.error);
+  else if (u.message?.text) onMessage(u.message).catch(console.error);
 });
 
 async function onMessage(m) {
   const chat_id = m.chat.id, text = m.text.trim();
+  if (text.startsWith("/mute")) {
+    const r = await pool.query("insert into users (id,mute) values ($1,true) on conflict (id) do update set mute = not users.mute returning mute", [m.from.id]);
+    return tg("sendMessage", { chat_id, text: r.rows[0].mute ? "Уведомления о кликах выключены. Отправьте /mute, чтобы включить снова." : "Уведомления о кликах включены." });
+  }
+  if (text.startsWith("/paysupport")) return tg("sendMessage", { chat_id, text: `Вопросы по оплате: ${process.env.SUPPORT || "напишите владельцу бота"}. Мы поможем или вернём Stars.` });
+  if (text.startsWith("/terms")) return tg("sendMessage", { chat_id, text: `Pro даёт до ${PRO_LIMIT} ссылок на ${PRO_DAYS} дней за ${PRO_PRICE} Stars. Автопродления нет.` });
   if (text.startsWith("/new")) {
     try {
       const code = await createLink(m.from.id, text.slice(4).trim());
       return tg("sendMessage", { chat_id, text: `Готово: ${BASE_URL}/s/${code}\nДобавьте ?src=название, чтобы отслеживать источник.` });
-    } catch {
+    } catch (x) {
+      if (x.message === "limit") return tg("sendMessage", { chat_id, text: `Лимит бесплатного плана: ${x.limit} ссылок. Откройте приложение и подключите Pro.`,
+        reply_markup: { inline_keyboard: [[{ text: "Открыть приложение", web_app: { url: `${BASE_URL}/app` } }]] } });
       return tg("sendMessage", { chat_id, text: "Отправьте ссылку так: /new https://example.com" });
     }
   }
@@ -88,7 +140,10 @@ app.use("/api", async (req, res, next) => {
 
 app.post("/api/links", async (req, res) => {
   try { res.json({ code: await createLink(req.uid, req.body.url, String(req.body.name || "").trim().slice(0, 60) || null) }); }
-  catch { res.status(400).json({ error: "Некорректная ссылка" }); }
+  catch (x) {
+    if (x.message === "limit") return res.status(402).json({ limit: true, error: `Лимит бесплатного плана: ${x.limit} ссылок. Подключите Pro, чтобы снять ограничение.` });
+    res.status(400).json({ error: "Некорректная ссылка" });
+  }
 });
 
 app.get("/api/links", async (req, res) => {
@@ -102,7 +157,8 @@ app.get("/api/links/:code", async (req, res) => {
   const { code } = req.params;
   const own = await pool.query("select 1 from links where code=$1 and owner=$2", [code, req.uid]);
   if (!own.rows[0]) return res.status(404).json({ error: "not found" });
-  const since = Date.now() - 7 * 864e5;
+  const nd = [7, 30, 90].includes(Number(req.query.days)) ? Number(req.query.days) : 7;
+  const since = Date.now() - nd * 864e5;
   const top = (col) => pool.query(
     `select ${col} as k, count(*)::int as n from clicks where code=$1 and ts>$2 group by k order by n desc limit 5`, [code, since]);
   const [days, countries, sources] = await Promise.all([
@@ -111,6 +167,33 @@ app.get("/api/links/:code", async (req, res) => {
     top("country"), top("nullif(src,'')"),
   ]);
   res.json({ days: days.rows, countries: countries.rows, sources: sources.rows });
+});
+
+app.post("/api/links/:code/export", async (req, res) => {
+  const own = await pool.query("select 1 from links where code=$1 and owner=$2", [req.params.code, req.uid]);
+  if (!own.rows[0]) return res.status(404).json({ error: "not found" });
+  const { rows } = await pool.query("select ts,country,device,src from clicks where code=$1 order by ts desc limit 50000", [req.params.code]);
+  // src задаёт любой посетитель, поэтому защищаем от формул в Excel
+  const esc = (v) => { let t = String(v ?? ""); if (/^[=+\-@\t\r]/.test(t)) t = "'" + t; return `"${t.replace(/"/g, '""')}"`; };
+  const csv = "\ufeffdate_utc,country,device,source\n" +
+    rows.map((r) => [new Date(Number(r.ts)).toISOString(), r.country, r.device, r.src].map(esc).join(",")).join("\n");
+  const fd = new FormData();
+  fd.append("chat_id", String(req.uid)); fd.append("caption", `Клики по /s/${req.params.code}: ${rows.length}`);
+  fd.append("document", new Blob([csv], { type: "text/csv" }), `clicks-${req.params.code}.csv`);
+  const r = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendDocument`, { method: "POST", body: fd });
+  r.ok ? res.json({ ok: true }) : res.status(502).json({ error: "Не удалось отправить файл. Напишите боту /start и повторите." });
+});
+
+app.get("/api/me", async (req, res) => {
+  res.json({ ...(await plan(req.uid)), price: PRO_PRICE, days: PRO_DAYS, proLimit: PRO_LIMIT });
+});
+
+app.post("/api/invoice", async (req, res) => {
+  const r = await (await tg("createInvoiceLink", {
+    title: "TrackLink Pro", description: `${PRO_DAYS} дней: до ${PRO_LIMIT} ссылок`,
+    payload: `pro:${req.uid}`, currency: "XTR", prices: [{ label: "Pro на 30 дней", amount: PRO_PRICE }],
+  })).json();
+  r.ok ? res.json({ link: r.result }) : res.status(500).json({ error: "Не удалось создать счёт" });
 });
 
 app.patch("/api/links/:code", async (req, res) => {

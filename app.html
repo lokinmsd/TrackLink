@@ -15,7 +15,16 @@
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
 body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.45 system-ui,-apple-system,"SF Pro Text","Segoe UI",Roboto,sans-serif;padding:32px 22px calc(40px + env(safe-area-inset-bottom,0px))}
 .total{font-size:64px;font-weight:300;letter-spacing:-.04em;line-height:1;font-variant-numeric:tabular-nums}
-.cap{color:var(--hint);margin:6px 0 30px}
+.cap{color:var(--hint);margin:6px 0 12px}
+.plan{display:flex;align-items:center;gap:12px;color:var(--hint);font-size:14px;margin-bottom:28px;min-height:20px}
+.plan button{border:0;background:none;padding:0;color:var(--accent);font:inherit;font-weight:500;cursor:pointer}
+.scrim{position:fixed;inset:0;background:rgba(0,0,0,.45);opacity:0;pointer-events:none;transition:opacity .35s var(--ease)}
+.sheet{position:fixed;left:0;right:0;bottom:0;background:var(--bg);border-radius:22px 22px 0 0;padding:26px 22px calc(24px + env(safe-area-inset-bottom,0px));transform:translateY(105%);transition:transform .5s var(--ease)}
+.open-sheet .scrim{opacity:1;pointer-events:auto}.open-sheet .sheet{transform:none}
+.sheet h2{margin:0 0 6px;font-size:22px;font-weight:600;letter-spacing:-.02em}
+.sheet p{margin:0 0 22px;color:var(--hint)}
+.wide{width:100%;padding:14px}
+.ghostb{border:0;background:none;color:var(--hint);font:inherit;width:100%;padding:14px 0 0;cursor:pointer}
 form{display:flex;gap:12px;align-items:center;border-bottom:1px solid var(--line);padding-bottom:6px;transition:border-color .3s}
 form:focus-within{border-color:var(--accent)}
 #u{flex:1;min-width:0;border:0;background:transparent;color:var(--fg);font:inherit;font-size:16px;padding:10px 0;outline:0}
@@ -50,7 +59,10 @@ form:focus-within{border-color:var(--accent)}
 .cols{display:grid;grid-template-columns:1fr 1fr;gap:24px;margin-bottom:20px}
 .cols h3{margin:0 0 8px;font-size:13px;font-weight:500;color:var(--hint)}
 .r{display:flex;justify-content:space-between;padding:3px 0;font-variant-numeric:tabular-nums}
-.acts{display:flex;gap:22px}
+.acts{display:flex;gap:10px 18px;flex-wrap:wrap}
+.seg{display:flex;gap:18px;margin-bottom:14px}
+.seg button{border:0;background:none;padding:0;color:var(--hint);font:inherit;font-size:13px;cursor:pointer;transition:color .25s}
+.seg .on{color:var(--fg);font-weight:600}
 .acts button{border:0;background:none;padding:0;cursor:pointer;color:var(--accent);font:inherit;font-size:14px;font-weight:500;transition:opacity .2s}
 .acts button:active{opacity:.5}
 .acts .del{color:#e5484d;margin-left:auto}
@@ -61,9 +73,12 @@ form:focus-within{border-color:var(--accent)}
 <body>
 <div class="total" id="total">0</div>
 <div class="cap">всего кликов</div>
+<div class="plan" id="plan"></div>
 <form id="f"><input id="u" placeholder="Вставьте ссылку" inputmode="url" autocomplete="off" required><button class="add" id="b">Создать</button></form>
 <div id="err" class="err" hidden></div>
 <div id="list" class="list"></div>
+<div class="scrim" id="scrim"></div>
+<div class="sheet" id="sheet"><h2>TrackLink Pro</h2><p id="sp"></p><button class="add wide" id="pay"></button><button class="ghostb" id="later">Не сейчас</button></div>
 <script>
 const tg = Telegram.WebApp; tg.ready(); tg.expand();
 const $ = (id) => document.getElementById(id);
@@ -73,13 +88,35 @@ const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
 const call = async (path, opt = {}) => {
   const r = await fetch("/api" + path, { ...opt, headers: { authorization: "tma " + tg.initData, "content-type": "application/json" } });
   const d = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(d.error || (r.status === 401 ? "Откройте приложение из Telegram." : "Ошибка, попробуйте ещё раз"));
+  if (!r.ok) { const e = new Error(d.error || (r.status === 401 ? "Откройте приложение из Telegram." : "Ошибка, попробуйте ещё раз")); e.limit = !!d.limit; throw e; }
   return d;
 };
 const host = (u) => { try { return new URL(u).host.replace(/^www\./, ""); } catch { return u; } };
 const flag = (c) => /^[A-Z]{2}$/.test(c) ? String.fromCodePoint(...[...c].map((x) => 127397 + x.charCodeAt())) : "🌐";
 const fail = (m) => { $("err").textContent = m; $("err").hidden = false; };
 const links = [], list = $("list");
+let me = null;
+const dt = (ms) => new Date(ms).toLocaleDateString("ru", { day: "numeric", month: "long" });
+function renderPlan() {
+  const p = $("plan"); p.replaceChildren(); if (!me) return;
+  if (me.pro) { p.append(el("span", "", "Pro до " + dt(me.until))); return; }
+  const b = el("button", "", "Подключить Pro"); b.onclick = openSheet;
+  p.append(el("span", "", `Бесплатно: ${me.used} из ${me.limit}`), b);
+}
+const loadMe = () => call("/me").then((d) => { me = d; renderPlan(); }).catch(() => {});
+function openSheet() {
+  if (!me) return;
+  $("sp").textContent = `${me.days} дней, до ${me.proLimit} ссылок. Продление добавляет дни к текущему сроку.`;
+  $("pay").textContent = `Оплатить ${me.price} ⭐`; document.body.classList.add("open-sheet");
+}
+const closeSheet = () => document.body.classList.remove("open-sheet");
+$("scrim").onclick = closeSheet; $("later").onclick = closeSheet;
+$("pay").onclick = async () => {
+  try {
+    const { link } = await call("/invoice", { method: "POST" });
+    tg.openInvoice(link, (s) => { if (s === "paid") { hap("medium"); closeSheet(); loadMe(); } });
+  } catch (x) { fail(x.message); }
+};
 let shown = 0, raf;
 
 function countTo(to) {
@@ -130,7 +167,7 @@ function row(l) {
   const doDel = async () => {
     try {
       await call("/links/" + l.code, { method: "DELETE" });
-      hap("medium"); item.classList.add("gone"); links.splice(links.indexOf(l), 1); sync();
+      hap("medium"); item.classList.add("gone"); links.splice(links.indexOf(l), 1); sync(); loadMe();
       setTimeout(() => { item.remove(); if (!links.length) showEmpty(); }, 480);
     } catch (x) { fail(x.message); }
   };
@@ -139,24 +176,40 @@ function row(l) {
     tg.showConfirm ? tg.showConfirm(msg, (ok) => ok && doDel()) : confirm(msg) && doDel();
   };
 
+  let period = 7;
   const detail = async () => {
-    const d = await call("/links/" + l.code);
+    const d = await call(`/links/${l.code}?days=${period}`);
     const map = Object.fromEntries(d.days.map((x) => [x.k, x.n]));
-    const days = [...Array(7)].map((_, i) => new Date(Date.now() - (6 - i) * 864e5));
+    const days = [...Array(period)].map((_, i) => new Date(Date.now() - (period - 1 - i) * 864e5));
     const vals = days.map((x) => map[x.toISOString().slice(0, 10)] || 0), max = Math.max(1, ...vals);
     const bars = el("div", "bars"), labels = el("div", "days");
+    if (period > 7) bars.style.gap = "3px";
     vals.forEach((v, i) => {
-      const b = el("div", "bar" + (i === 6 ? " today" : "")), bi = document.createElement("i");
-      bi.style.height = Math.max(5, (v / max) * 100) + "%"; bi.style.transitionDelay = i * 45 + "ms"; bi.title = v;
-      b.append(bi); bars.append(b); labels.append(el("span", "", days[i].toLocaleDateString("ru", { weekday: "short" })));
+      const b = el("div", "bar" + (i === period - 1 ? " today" : "")), bi = document.createElement("i");
+      bi.style.height = Math.max(5, (v / max) * 100) + "%"; bi.style.transitionDelay = Math.min(i * 45, 600) + "ms"; bi.title = v;
+      b.append(bi); bars.append(b);
+      if (period === 7) labels.append(el("span", "", days[i].toLocaleDateString("ru", { weekday: "short" })));
+    });
+    if (period > 7) [0, Math.floor(period / 2), period - 1].forEach((i) => labels.append(el("span", "", days[i].toLocaleDateString("ru", { day: "numeric", month: "short" }))));
+    const seg = el("div", "seg");
+    [7, 30, 90].forEach((p) => {
+      const b = el("button", p === period ? "on" : "", p + " дн.");
+      b.onclick = () => { if (p === period) return; period = p; hap(); detail().catch((x) => fail(x.message)); };
+      seg.append(b);
     });
     const cols = el("div", "cols");
     cols.append(pairs("Страны", d.countries, (k) => (k ? flag(k) + " " + k : "—")), pairs("Источники", d.sources, (k) => k || "без метки"));
-    const acts = el("div", "acts"), copy = el("button", "", "Копировать"), ren = el("button", "", "Назвать"), rm = el("button", "del", "Удалить");
+    const acts = el("div", "acts"), copy = el("button", "", "Копировать"), ren = el("button", "", "Назвать"), exp = el("button", "", "Выгрузить"), rm = el("button", "del", "Удалить");
     copy.onclick = () => { navigator.clipboard.writeText(location.origin + "/s/" + l.code); hap(); copy.textContent = "Скопировано"; setTimeout(() => (copy.textContent = "Копировать"), 1600); };
-    ren.onclick = rename; rm.onclick = del; acts.append(copy, ren, rm);
-    const box = el("div"); box.append(bars, labels, cols, acts); pad.replaceChildren(box);
-    requestAnimationFrame(() => requestAnimationFrame(() => box.classList.add("shown")));
+    exp.onclick = async () => {
+      exp.textContent = "Отправляю…";
+      try { await call("/links/" + l.code + "/export", { method: "POST" }); exp.textContent = "Файл в чате с ботом"; hap(); }
+      catch (x) { exp.textContent = "Выгрузить"; fail(x.message); }
+      setTimeout(() => (exp.textContent = "Выгрузить"), 2500);
+    };
+    ren.onclick = rename; rm.onclick = del; acts.append(copy, ren, exp, rm);
+    const nb = el("div"); nb.append(seg, bars, labels, cols, acts); pad.replaceChildren(nb);
+    requestAnimationFrame(() => requestAnimationFrame(() => nb.classList.add("shown")));
   };
   let loaded = false;
   const toggle = () => {
@@ -174,15 +227,16 @@ $("f").onsubmit = async (e) => {
   b.disabled = true;
   try {
     const { code } = await call("/links", { method: "POST", body: JSON.stringify({ url }) });
-    $("u").value = ""; hap("medium");
+    $("u").value = ""; hap("medium"); loadMe();
     const l = { code, url, name: null, clicks: 0 }; links.unshift(l);
     if (links.length === 1) list.replaceChildren();
     const r = row(l); r.classList.add("gone"); list.prepend(r);
     requestAnimationFrame(() => requestAnimationFrame(() => r.classList.remove("gone")));
-  } catch (x) { fail(x.message); }
+  } catch (x) { fail(x.message); if (x.limit) openSheet(); }
   b.disabled = false;
 };
 
+loadMe();
 call("/links").then((d) => {
   links.push(...d);
   links.length ? list.replaceChildren(...links.map(row)) : showEmpty();
