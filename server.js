@@ -94,7 +94,7 @@ async function plan(uid) {
 
 // Уведомление владельцу: первый клик и отметки 100, 1000, 10000
 async function notify(code, row) {
-  const n = (await pool.query("select count(*)::int as n from clicks where code=$1", [code])).rows[0].n;
+  const n = (await pool.query("select count(*)::int as n from clicks where code=$1 and not is_bot", [code])).rows[0].n;
   if (![1, 100, 1000, 10000].includes(n)) return;
   const u = await pool.query("select mute from users where id=$1", [row.owner]);
   if (u.rows[0]?.mute) return;
