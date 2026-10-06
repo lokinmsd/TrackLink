@@ -28,6 +28,7 @@ const tg = (method, body) =>
     method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
   });
 
+const BOT_RE = /bot|crawl|spider|preview|facebookexternalhit|telegrambot|whatsapp|slackbot|discord|linkedin|curl|wget|python-requests|headless/i;
 const ALPHA = "abcdefghijkmnpqrstuvwxyz23456789";
 const newCode = () => [...crypto.randomBytes(6)].map((x) => ALPHA[x % ALPHA.length]).join("");
 
