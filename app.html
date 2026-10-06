@@ -173,7 +173,12 @@ function row(l) {
   const n = el("span", "n", l.clicks.toLocaleString("ru"));
   head.tabIndex = 0; head.setAttribute("role", "button");
   const setName = () => { name.textContent = l.name || host(l.url); };
-  setName(); t.append(name, el("span", "sub", "/s/" + l.code)); head.append(t, spark(l.spark || [0, 0, 0, 0, 0, 0, 0]), n);
+  const stat = () => {
+    if (l.uniq == null) return "/s/" + l.code;
+    const cr = l.uniq ? ((l.leads / l.uniq) * 100).toFixed(1) : "0";
+    return `/s/${l.code} · ${l.uniq} уник. · ${l.leads} конв. · CR ${cr}%` + (l.revenue ? ` · ${l.revenue}` : "");
+  };
+  setName(); t.append(name, el("span", "sub", stat())); head.append(t, spark(l.spark || [0, 0, 0, 0, 0, 0, 0]), n);
   const more = el("div", "more"), mi = el("div"), pad = el("div", "pad");
   mi.append(pad); more.append(mi); inner.append(head, more); item.append(inner);
 
