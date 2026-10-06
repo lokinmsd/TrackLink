@@ -125,15 +125,24 @@ app.get("/", (_, res) => res.send("ok")); // для проверки живос�
 app.get("/app", (_, res) => res.type("html").send(APP));
 
 app.get("/s/:code", async (req, res) => {
+ app.get("/s/:code", async (req, res) => {
   try {
     const { rows } = await pool.query("select url, owner, name from links where code=$1", [req.params.code]);
     if (!rows[0]) return res.status(404).send("Ссылка не найдена");
     const ip = (req.headers["x-forwarded-for"] || req.ip || "").toString().split(",")[0].trim();
     const country = geoip.lookup(ip)?.country || "??";
-    const device = /mobile|android|iphone/i.test(req.headers["user-agent"] || "") ? "mobile" : "desktop";
+    const ua = req.headers["user-agent"] || "";
+    const isBot = !ua || BOT_RE.test(ua);
+    const device = /mobile|android|iphone/i.test(ua) ? "mobile" : "desktop";
+    const vid = crypto.createHash("sha256").update(ip + "|" + ua).digest("hex").slice(0, 16);
     res.redirect(302, rows[0].url); // сначала отвечаем, потом пишем клик
-    pool.query("insert into clicks (code,ts,country,device,src) values ($1,$2,$3,$4,$5)",
-      [req.params.code, Date.now(), country, device, req.query.src || ""]).then(() => notify(req.params.code, rows[0])).catch(console.error);
+    const now = Date.now();
+    pool.query(
+      `insert into clicks (code,ts,country,device,src,is_bot,vid,is_unique)
+       select $1,$2,$3,$4,$5,$6,$7,
+         (not $6 and not exists (select 1 from clicks where code=$1 and vid=$7 and ts>$8 and not is_bot))`,
+      [req.params.code, now, country, device, req.query.src || "", isBot, vid, now - 864e5]
+    ).then(() => (isBot ? null : notify(req.params.code, rows[0]))).catch(console.error);
   } catch (e) { console.error(e); res.status(500).send("Ошибка сервера"); }
 });
 
