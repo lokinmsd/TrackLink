@@ -145,7 +145,37 @@ app.get("/s/:code", async (req, res) => {
     ).then(() => (isBot ? null : notify(req.params.code, rows[0]))).catch(console.error);
   } catch (e) { console.error(e); res.status(500).send("Ошибка сервера"); }
 });
+app.get("/cron/digest", async (req, res) => {
+  if (!process.env.CRON_KEY || req.query.key !== process.env.CRON_KEY) return res.sendStatus(403);
+  res.send("ok");
+  try {
+    const since = Date.now() - 864e5;
+    const { rows } = await pool.query(
+      `select l.owner, l.code, l.name, l.url,
+         count(c.id) filter (where not c.is_bot)::int as clicks,
+         count(c.id) filter (where c.is_unique)::int as uniq,
+         (select count(*)::int from conversions v where v.code=l.code and v.ts>$1) as leads,
+         (select coalesce(sum(v.payout),0)::float from conversions v where v.code=l.code and v.ts>$1) as revenue
+       from links l
+       left join users u on u.id=l.owner
+       left join clicks c on c.code=l.code and c.ts>$1
+       where coalesce(u.digest,true)
+       group by l.owner, l.code, l.name, l.url`, [since]);
+    const by = {};
+    rows.forEach((r) => (by[r.owner] ||= []).push(r));
+    for (const [owner, ls] of Object.entries(by)) {
+      const sum = (k) => ls.reduce((s, x) => s + x[k], 0);
+      if (!sum("clicks") && !sum("leads")) continue;
+      const title = (x) => x.name || host(x.url);
+      const top = ls.sort((a, b) => b.clicks - a.clicks).slice(0, 5)
+        .map((x, i) => `${i + 1}. ${title(x)}: ${x.clicks} кл., ${x.leads} конв.`).join("\n");
+      const text = `Итоги за 24 ч\nКлики: ${sum("clicks")} (уник. ${sum("uniq")})\nКонверсии: ${sum("leads")}\nДоход: ${Math.round(sum("revenue") * 100) / 100}\n\nТоп:\n${top}\n\nОтключить дайджест: /digest`;
+      await tg("sendMessage", { chat_id: Number(owner), text }).catch(console.error);
+    }
+  } catch (e) { console.error(e); }
+});
 
+const host = (u) => { try { return new URL(u).host.replace(/^www\./, ""); } catch { return u; } };
 app.post("/webhook", (req, res) => {
   if (req.headers["x-telegram-bot-api-secret-token"] !== WEBHOOK_SECRET) return res.sendStatus(403);
   res.send("ok");
