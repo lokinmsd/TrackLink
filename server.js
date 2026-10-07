@@ -11,6 +11,10 @@ const app = express();
 app.set("trust proxy", true);
 app.use(express.json());
 
+// Боты, превью-сканеры и скрипты: такие переходы не считаются кликами
+const BOT_RE = /bot|crawl|spider|preview|facebookexternalhit|telegrambot|whatsapp|slackbot|discord|linkedin|curl|wget|python-requests|headless/i;
+const host = (u) => { try { return new URL(u).host.replace(/^www\./, ""); } catch { return u; } };
+
 // Проверка подписи Telegram initData: так мини-апп доказывает, кто пользователь
 function verify(initData = "") {
   const p = new URLSearchParams(initData);
@@ -28,7 +32,6 @@ const tg = (method, body) =>
     method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
   });
 
-const BOT_RE = /bot|crawl|spider|preview|facebookexternalhit|telegrambot|whatsapp|slackbot|discord|linkedin|curl|wget|python-requests|headless/i;
 const ALPHA = "abcdefghijkmnpqrstuvwxyz23456789";
 const newCode = () => [...crypto.randomBytes(6)].map((x) => ALPHA[x % ALPHA.length]).join("");
 
@@ -92,7 +95,7 @@ async function plan(uid) {
   return { pro, until: pro ? until : null, limit: pro ? PRO_LIMIT : FREE_LIMIT, used };
 }
 
-// Уведомление владельцу: первый клик и отметки 100, 1000, 10000
+// Уведомление владельцу: первый клик и отметки 100, 1000, 10000 (боты не считаются)
 async function notify(code, row) {
   const n = (await pool.query("select count(*)::int as n from clicks where code=$1 and not is_bot", [code])).rows[0].n;
   if (![1, 100, 1000, 10000].includes(n)) return;
@@ -125,7 +128,6 @@ app.get("/", (_, res) => res.send("ok")); // для проверки живос�
 app.get("/app", (_, res) => res.type("html").send(APP));
 
 app.get("/s/:code", async (req, res) => {
- app.get("/s/:code", async (req, res) => {
   try {
     const { rows } = await pool.query("select url, owner, name from links where code=$1", [req.params.code]);
     if (!rows[0]) return res.status(404).send("Ссылка не найдена");
@@ -135,16 +137,44 @@ app.get("/s/:code", async (req, res) => {
     const isBot = !ua || BOT_RE.test(ua);
     const device = /mobile|android|iphone/i.test(ua) ? "mobile" : "desktop";
     const vid = crypto.createHash("sha256").update(ip + "|" + ua).digest("hex").slice(0, 16);
-    res.redirect(302, rows[0].url); // сначала отвечаем, потом пишем клик
+    const cid = crypto.randomBytes(6).toString("hex");
+    // {click_id} в ссылке оффера заменяется на id этого клика
+    const target = rows[0].url.replace(/\{click_id\}|%7Bclick_id%7D/gi, cid);
+    res.redirect(302, target); // сначала отвечаем, потом пишем клик
     const now = Date.now();
     pool.query(
-      `insert into clicks (code,ts,country,device,src,is_bot,vid,is_unique)
-       select $1,$2,$3,$4,$5,$6,$7,
-         (not $6 and not exists (select 1 from clicks where code=$1 and vid=$7 and ts>$8 and not is_bot))`,
-      [req.params.code, now, country, device, req.query.src || "", isBot, vid, now - 864e5]
+      `insert into clicks (code,ts,country,device,src,is_bot,vid,is_unique,cid)
+       select $1::text,$2::bigint,$3::text,$4::text,$5::text,$6::boolean,$7::text,
+         (not $6::boolean and not exists (select 1 from clicks where code=$1::text and vid=$7::text and ts>$8::bigint and not is_bot)),
+         $9::text`,
+      [req.params.code, now, country, device, req.query.src || "", isBot, vid, now - 864e5, cid]
     ).then(() => (isBot ? null : notify(req.params.code, rows[0]))).catch(console.error);
   } catch (e) { console.error(e); res.status(500).send("Ошибка сервера"); }
 });
+
+// Постбэк от партнёрки: /postback?key=...&click_id=...&payout=...&status=...
+app.get("/postback", async (req, res) => {
+  try {
+    const key = process.env.POSTBACK_KEY;
+    if (!key || req.query.key !== key) return res.sendStatus(403);
+    const cid = String(req.query.click_id || "");
+    const status = String(req.query.status || "lead").slice(0, 20);
+    const payout = Number(req.query.payout) || 0;
+    const c = await pool.query("select c.code, l.owner, l.name, l.url from clicks c join links l on l.code=c.code where c.cid=$1", [cid]);
+    if (!c.rows[0]) return res.status(404).send("click not found");
+    const row = c.rows[0];
+    const ins = await pool.query(
+      "insert into conversions (code,cid,status,payout,ts) values ($1,$2,$3,$4,$5) on conflict do nothing",
+      [row.code, cid, status, payout, Date.now()]);
+    res.send("ok");
+    if (!ins.rowCount) return;
+    const u = await pool.query("select mute from users where id=$1", [row.owner]);
+    if (u.rows[0]?.mute) return;
+    await tg("sendMessage", { chat_id: row.owner, text: `Конверсия по «${row.name || host(row.url)}»: ${status}, ${payout}` });
+  } catch (e) { console.error(e); res.status(500).send("error"); }
+});
+
+// Ежедневный дайджест: дёргается внешним cron: /cron/digest?key=CRON_KEY
 app.get("/cron/digest", async (req, res) => {
   if (!process.env.CRON_KEY || req.query.key !== process.env.CRON_KEY) return res.sendStatus(403);
   res.send("ok");
@@ -166,16 +196,14 @@ app.get("/cron/digest", async (req, res) => {
     for (const [owner, ls] of Object.entries(by)) {
       const sum = (k) => ls.reduce((s, x) => s + x[k], 0);
       if (!sum("clicks") && !sum("leads")) continue;
-      const title = (x) => x.name || host(x.url);
-      const top = ls.sort((a, b) => b.clicks - a.clicks).slice(0, 5)
-        .map((x, i) => `${i + 1}. ${title(x)}: ${x.clicks} кл., ${x.leads} конв.`).join("\n");
+      const top = [...ls].sort((a, b) => b.clicks - a.clicks).slice(0, 5)
+        .map((x, i) => `${i + 1}. ${x.name || host(x.url)}: ${x.clicks} кл., ${x.leads} конв.`).join("\n");
       const text = `Итоги за 24 ч\nКлики: ${sum("clicks")} (уник. ${sum("uniq")})\nКонверсии: ${sum("leads")}\nДоход: ${Math.round(sum("revenue") * 100) / 100}\n\nТоп:\n${top}\n\nОтключить дайджест: /digest`;
       await tg("sendMessage", { chat_id: Number(owner), text }).catch(console.error);
     }
   } catch (e) { console.error(e); }
 });
 
-const host = (u) => { try { return new URL(u).host.replace(/^www\./, ""); } catch { return u; } };
 app.post("/webhook", (req, res) => {
   if (req.headers["x-telegram-bot-api-secret-token"] !== WEBHOOK_SECRET) return res.sendStatus(403);
   res.send("ok");
@@ -192,6 +220,10 @@ async function onMessage(m) {
   if (text.startsWith("/mute")) {
     const r = await pool.query("insert into users (id,mute) values ($1,true) on conflict (id) do update set mute = not users.mute returning mute", [m.from.id]);
     return tg("sendMessage", { chat_id, text: r.rows[0].mute ? "Уведомления о кликах выключены. Отправьте /mute, чтобы включить снова." : "Уведомления о кликах включены." });
+  }
+  if (text.startsWith("/digest")) {
+    const r = await pool.query("insert into users (id,digest) values ($1,false) on conflict (id) do update set digest = not users.digest returning digest", [m.from.id]);
+    return tg("sendMessage", { chat_id, text: r.rows[0].digest ? "Дайджест включён." : "Дайджест выключен. Отправьте /digest, чтобы включить." });
   }
   if (text.startsWith("/paysupport")) return tg("sendMessage", { chat_id, text: `Вопросы по оплате: ${process.env.SUPPORT || "напишите владельцу бота"}. Мы поможем или вернём Stars.` });
   if (text.startsWith("/terms")) return tg("sendMessage", { chat_id, text: `Pro даёт до ${PRO_LIMIT} ссылок на ${PRO_DAYS} дней за ${PRO_PRICE} Stars. Автопродления нет.` });
@@ -229,12 +261,16 @@ app.post("/api/links", async (req, res) => {
 
 app.get("/api/links", async (req, res) => {
   const { rows } = await pool.query(
-    `select l.code, l.name, l.url, l.created, (select count(*)::int from clicks c where c.code=l.code) as clicks
+    `select l.code, l.name, l.url, l.created,
+       (select count(*)::int from clicks c where c.code=l.code and not c.is_bot) as clicks,
+       (select count(*)::int from clicks c where c.code=l.code and c.is_unique) as uniq,
+       (select count(*)::int from conversions v where v.code=l.code) as leads,
+       (select coalesce(sum(v.payout),0)::float from conversions v where v.code=l.code) as revenue
      from links l where l.owner=$1 order by l.created desc limit 50`, [req.uid]);
   const since = Date.now() - 7 * 864e5;
   const sp = await pool.query(
     `select c.code, to_char(to_timestamp(c.ts/1000.0) at time zone 'UTC','YYYY-MM-DD') as d, count(*)::int as n
-     from clicks c join links l on l.code=c.code where l.owner=$1 and c.ts>$2 group by c.code, d`, [req.uid, since]);
+     from clicks c join links l on l.code=c.code where l.owner=$1 and c.ts>$2 and not c.is_bot group by c.code, d`, [req.uid, since]);
   const by = {};
   sp.rows.forEach((r) => ((by[r.code] ||= {})[r.d] = r.n));
   const days = [...Array(7)].map((_, i) => new Date(Date.now() - (6 - i) * 864e5).toISOString().slice(0, 10));
@@ -248,10 +284,10 @@ app.get("/api/links/:code", async (req, res) => {
   const nd = [7, 30, 90].includes(Number(req.query.days)) ? Number(req.query.days) : 7;
   const since = Date.now() - nd * 864e5;
   const top = (col) => pool.query(
-    `select ${col} as k, count(*)::int as n from clicks where code=$1 and ts>$2 group by k order by n desc limit 5`, [code, since]);
+    `select ${col} as k, count(*)::int as n from clicks where code=$1 and ts>$2 and not is_bot group by k order by n desc limit 5`, [code, since]);
   const [days, countries, sources] = await Promise.all([
     pool.query(`select to_char(to_timestamp(ts/1000.0) at time zone 'UTC','YYYY-MM-DD') as k, count(*)::int as n
-                from clicks where code=$1 and ts>$2 group by k`, [code, since]),
+                from clicks where code=$1 and ts>$2 and not is_bot group by k`, [code, since]),
     top("country"), top("nullif(src,'')"),
   ]);
   res.json({ days: days.rows, countries: countries.rows, sources: sources.rows });
@@ -260,11 +296,11 @@ app.get("/api/links/:code", async (req, res) => {
 app.post("/api/links/:code/export", async (req, res) => {
   const own = await pool.query("select 1 from links where code=$1 and owner=$2", [req.params.code, req.uid]);
   if (!own.rows[0]) return res.status(404).json({ error: "not found" });
-  const { rows } = await pool.query("select ts,country,device,src from clicks where code=$1 order by ts desc limit 50000", [req.params.code]);
+  const { rows } = await pool.query("select ts,country,device,src,is_unique,is_bot from clicks where code=$1 order by ts desc limit 50000", [req.params.code]);
   // src задаёт любой посетитель, поэтому защищаем от формул в Excel
   const esc = (v) => { let t = String(v ?? ""); if (/^[=+\-@\t\r]/.test(t)) t = "'" + t; return `"${t.replace(/"/g, '""')}"`; };
-  const csv = "\ufeffdate_utc,country,device,source\n" +
-    rows.map((r) => [new Date(Number(r.ts)).toISOString(), r.country, r.device, r.src].map(esc).join(",")).join("\n");
+  const csv = "\ufeffdate_utc,country,device,source,unique,bot\n" +
+    rows.map((r) => [new Date(Number(r.ts)).toISOString(), r.country, r.device, r.src, r.is_unique, r.is_bot].map(esc).join(",")).join("\n");
   const fd = new FormData();
   fd.append("chat_id", String(req.uid)); fd.append("caption", `Клики по /s/${req.params.code}: ${rows.length}`);
   fd.append("document", new Blob([csv], { type: "text/csv" }), `clicks-${req.params.code}.csv`);
